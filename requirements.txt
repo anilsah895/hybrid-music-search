@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlalchemy>=2.0
+asyncpg
+alembic
+pydantic
+numpy
+pgvector
+python-dotenv
+orjson
