@@ -8,3 +8,5 @@ numpy
 pgvector
 python-dotenv
 orjson
+psycopg2-binary  
+httpx>=0.27.0
