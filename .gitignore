@@ -15,11 +15,11 @@ dist/
 build/
 
 # -------------------------
-# Environment variables
+# Environment variables (IMPORTANT)
 # -------------------------
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example   # allow example file for reviewers
 
 # -------------------------
 # IDE / Editor
@@ -51,9 +51,7 @@ htmlcov/
 # Alembic
 # -------------------------
 alembic/versions/__pycache__/
-
-# (optional) if you regenerate migrations often
-# alembic/versions/*.pyc
+alembic/versions/*.pyc
 
 # -------------------------
 # Local data / datasets
@@ -63,13 +61,16 @@ data/
 *.csv
 *.parquet
 
+# (IMPORTANT tweak)
+!data/sample.json   # optional: keep tiny seed sample if needed
+
 # -------------------------
-# Docker
+# Docker / runtime artifacts
 # -------------------------
 *.pid
 
 # -------------------------
-# Vector DB / local artifacts (optional safety)
+# Databases / local state
 # -------------------------
 *.db
 *.sqlite
