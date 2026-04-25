@@ -1,66 +1,78 @@
 import asyncio
 from collections import defaultdict
+from sqlalchemy import text
 
 
 class FeedbackBuffer:
     def __init__(self):
-        # We separate clicks and impressions because CTR = clicks / impressions
-        # Mixing them would break ranking logic in Part 3 completely.
+        # In-memory aggregation buffer:
+        # track_id -> {"clicks": int, "impressions": int}
+        #
+        # We separate clicks and impressions because CTR depends on both.
+        # Mixing all feedback into one counter would weaken ranking quality.
         self.buffer = defaultdict(lambda: {"clicks": 0, "impressions": 0})
 
-        # Async lock ensures safe updates under high concurrency (5,000 RPS)
-        # Prevents race conditions when multiple requests update buffer simultaneously
+        # Async lock protects the shared in-memory buffer from race conditions
+        # when many concurrent requests try to record feedback at once.
         self.lock = asyncio.Lock()
 
     async def record(self, track_id: str, event_type: str):
         """
-        Called by POST /feedback endpoint.
-        This is the hot path (high QPS), so we keep it extremely lightweight.
+        Called by the feedback endpoint.
+        This method is intentionally lightweight because it sits on the hot path.
         """
 
         async with self.lock:
-            # We explicitly separate event types to preserve signal integrity
-            # Clicks = strong engagement signal
-            # Impressions = exposure signal (denominator for CTR)
+            # Click = stronger engagement signal
             if event_type == "click":
                 self.buffer[track_id]["clicks"] += 1
 
+            # Impression = exposure signal used as denominator for CTR-like features
             elif event_type == "impression":
                 self.buffer[track_id]["impressions"] += 1
 
             else:
-                # Unknown events are ignored to avoid polluting ranking data
+                # Ignore unknown event types so bad client data does not pollute ranking
                 return
 
     async def flush(self, session):
         """
-        Batch flush to Postgres.
-        Goal: eliminate row-level contention by aggregating updates in memory first.
+        Batch flush aggregated counters to Postgres.
+
+        Why batching helps:
+        - avoids one UPDATE per request
+        - reduces row-level lock contention
+        - keeps request latency low under higher throughput
         """
 
-        # Snapshot buffer under lock to ensure consistency
-        # We immediately replace it to avoid blocking incoming requests
+        # Snapshot the current buffer under lock so new events can continue
+        # flowing into a fresh buffer immediately.
         async with self.lock:
-            batch = self.buffer
+            batch = dict(self.buffer)
             self.buffer = defaultdict(lambda: {"clicks": 0, "impressions": 0})
 
-        # DB writes happen outside lock so ingestion is never blocked
-        # This is critical for maintaining low latency under load
-        for track_id, counts in batch.items():
+        # Nothing to flush -> exit early
+        if not batch:
+            return
 
+        # Apply all accumulated increments.
+        # We do DB work outside the lock so the hot path stays fast.
+        for track_id, counts in batch.items():
             await session.execute(
-                """
-                UPDATE music_tracks
-                SET clicks = clicks + :clicks,
-                    impressions = impressions + :impressions
-                WHERE id = :id
-                """,
+                text("""
+                    UPDATE music_tracks
+                    SET
+                        clicks = clicks + :clicks,
+                        impressions = impressions + :impressions
+                    WHERE id = :id
+                """),
                 {
                     "id": track_id,
                     "clicks": counts["clicks"],
                     "impressions": counts["impressions"],
-                }
+                },
             )
 
-        # Commit once per flush (not per event → major performance gain)
+        # Commit once per batch, not once per event.
+        # This is much cheaper and scales better.
         await session.commit()

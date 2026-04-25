@@ -1,72 +1,105 @@
 import math
 import time
+from datetime import datetime, timezone
+
 
 # =========================================================
 # PART 3 — SCORING FUNCTION (HYBRID RANKING)
 # =========================================================
 def calculate_final_score(r):
+    """
+    Combine retrieval, behavioral, and freshness signals into one ranking score.
+
+    Expected input keys in r:
+    - vector_score
+    - text_score
+    - clicks
+    - impressions
+    - created_at
+    """
 
     # -------------------------
-    # Retrieval signals (semantic + lexical relevance)
-    # These come from Part 1/2 hybrid search stage
+    # Retrieval signals
+    # These are produced by the hybrid retrieval stage.
+    # vector_score = semantic relevance from embeddings
+    # text_score   = lexical relevance from full-text search
     # -------------------------
-    vector = r.get("vector_score", 0.0)  # semantic similarity (embeddings)
-    text = r.get("text_score", 0.0)      # lexical match (FTS relevance)
+    vector = float(r.get("vector_score", 0.0) or 0.0)
+    text = float(r.get("text_score", 0.0) or 0.0)
 
-    clicks = r.get("clicks", 0)
-    impressions = r.get("impressions", 0)
+    # Behavioral signals gathered from feedback aggregation
+    clicks = int(r.get("clicks", 0) or 0)
+    impressions = int(r.get("impressions", 0) or 0)
 
     # -------------------------
     # CTR MODEL (Bayesian smoothing)
-    # Purpose:
-    # - prevents small-sample bias (e.g. 1/1 CTR dominating ranking)
-    # - stabilizes engagement signal under sparse data
+    # Why smoothing matters:
+    # - avoids tiny samples dominating (for example 1 click / 1 impression)
+    # - gives cold-start items a reasonable prior instead of extreme scores
     # -------------------------
     alpha = 5
     beta = 20
-
     ctr = (clicks + alpha) / (impressions + alpha + beta)
 
     # -------------------------
     # RECENCY MODEL (temporal decay)
-    # Purpose:
-    # - boosts newer content for freshness-sensitive queries
-    # - avoids completely suppressing older high-quality content
+    # We support:
+    # - datetime objects
+    # - Unix timestamps (int/float)
+    # - missing values
+    # This makes the function resilient during migration or mixed test setups.
     # -------------------------
-    created_at = r.get("created_at", None)
+    created_at = r.get("created_at")
 
     if created_at is None:
-        age_days = 365  # fallback for missing timestamps (cold data ingestion cases)
-    else:
-        age_days = max(1, (time.time() - created_at) / 86400)
+        # Missing timestamp -> treat as older/cold data
+        age_days = 365
 
-    # exponential decay gives smooth long-term relevance drop
+    elif isinstance(created_at, datetime):
+        # Normalize naive datetimes to UTC for safety
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+
+        age_days = max(
+            1.0,
+            (datetime.now(timezone.utc) - created_at).total_seconds() / 86400.0
+        )
+
+    elif isinstance(created_at, (int, float)):
+        # Backward-compatible path for old test code using Unix timestamps
+        age_days = max(1.0, (time.time() - created_at) / 86400.0)
+
+    else:
+        # Unexpected type -> fall back conservatively
+        age_days = 365
+
+    # Exponential decay gives a smooth relevance drop over time
     freshness = math.exp(-age_days / 180)
 
     # -------------------------
-    # CONFIDENCE MODEL (data reliability)
-    # Purpose:
-    # - ensures low-interaction items are not overtrusted
-    # - avoids 0/0 or 1/1 cases behaving like strong signals
+    # CONFIDENCE MODEL
+    # Prevents low-volume items from looking overly trustworthy.
+    # More impressions = more confidence in observed CTR-like behavior.
     # -------------------------
     if impressions == 0:
-        confidence = 0.5  # neutral prior for cold start items
+        # Neutral confidence for cold-start rows
+        confidence = 0.5
     else:
+        # Saturates gradually as impression count grows
         confidence = min(math.log1p(impressions) / math.log1p(100), 1.0)
 
     # -------------------------
-    # COMBINED TEMPORAL SIGNAL
-    # We combine:
-    # - freshness (recency importance)
-    # - confidence (signal reliability)
+    # COMBINED TEMPORAL / RELIABILITY SIGNAL
+    # freshness = how new the item is
+    # confidence = how much we trust its observed engagement data
     # -------------------------
     recency_score = 0.7 * freshness + 0.3 * confidence
 
     # -------------------------
-    # FINAL HYBRID SCORE (Part 3 output)
-    # Design intent:
-    # - vector/text = primary relevance (retrieval layer)
-    # - ctr/recency = behavioral + temporal refinement
+    # FINAL HYBRID SCORE
+    # Primary emphasis stays on relevance:
+    # - vector + text drive retrieval quality
+    # - ctr and recency refine ordering
     # -------------------------
     return (
         0.45 * vector +
@@ -80,33 +113,39 @@ def calculate_final_score(r):
 # PART 5 — DIVERSITY LAYER (POST-RANKING RE-RANKER)
 # =========================================================
 def diversify_results(results, k=10):
+    """
+    Keep only one top result per conversion_group_id.
+
+    This avoids showing multiple sibling variants from the same generation
+    near the top of the result page.
+    """
 
     seen = set()
     out = []
 
-    # IMPORTANT:
-    # This assumes score is already computed (Part 3 output)
-    # Diversity operates ONLY on ranked list, not raw signals
+    # Diversity is applied after score computation, not before.
+    # Highest-scoring items should be considered first.
     sorted_results = sorted(
         results,
-        key=lambda x: x["score"],
-        reverse=True
+        key=lambda x: (-x["score"], str(x.get("id")))
     )
 
     for r in sorted_results:
-
-        # conversion_group_id = lineage identifier
-        # ensures we avoid showing multiple variants of same generation
+        # conversion_group_id acts as the lineage identifier
         gid = r.get("conversion_group_id")
 
-        # skip duplicates from same lineage (diversity enforcement)
+        # If the lineage is missing, fall back to title so we still reduce duplicates
+        if gid is None:
+            gid = r.get("title", "").strip().lower()
+
+        # Skip duplicate siblings from the same generation lineage
         if gid in seen:
             continue
 
         seen.add(gid)
         out.append(r)
 
-        # stop once we reach top-k diversified results
+        # Stop once we have k diversified results
         if len(out) >= k:
             break
 
@@ -116,43 +155,84 @@ def diversify_results(results, k=10):
 # =========================================================
 # TEST PIPELINE (SIMULATING PRODUCTION FLOW)
 # =========================================================
-if __name__ == "__main__":
+# if __name__ == "__main__":
+#     songs = [
+#         {"name": "A", "age_days": 3, "clicks": 40, "impressions": 60, "vector_score": 0.72},
+#         {"name": "B", "age_days": 730, "clicks": 1000, "impressions": 5000, "vector_score": 0.80},
+#         {"name": "C", "age_days": 1, "clicks": 1, "impressions": 1, "vector_score": 0.75},
+#         {"name": "D", "age_days": 180, "clicks": 0, "impressions": 0, "vector_score": 0.68},
+#     ]
 
+#     # -----------------------------------------------------
+#     # STEP 1 — Compute hybrid scores
+#     # -----------------------------------------------------
+#     scored_results = []
+
+#     for s in songs:
+#         # Simulate feature assembly coming from retrieval + feedback layers
+#         r = {
+#             "vector_score": s["vector_score"],
+#             "text_score": 0.2 if s["name"] == "A" else 0.05,
+#             "clicks": s["clicks"],
+#             "impressions": s["impressions"],
+#             "created_at": time.time() - s["age_days"] * 86400,
+#         }
+
+#         score = calculate_final_score(r)
+#         print(s["name"], score)
+
+#         scored_results.append({
+#             "conversion_group_id": s["name"],
+#             "score": score,
+#         })
+
+#     # -----------------------------------------------------
+#     # STEP 2 — Apply diversity re-ranking
+#     # -----------------------------------------------------
+#     print("\nDIVERSIFIED OUTPUT:")
+#     print(diversify_results(scored_results))
+
+if __name__ == "__main__":
     songs = [
-        {"name": "A", "age_days": 3, "clicks": 40, "impressions": 60, "vector_score": 0.72},
-        {"name": "B", "age_days": 730, "clicks": 1000, "impressions": 5000, "vector_score": 0.80},
-        {"name": "C", "age_days": 1, "clicks": 1, "impressions": 1, "vector_score": 0.75},
-        {"name": "D", "age_days": 180, "clicks": 0, "impressions": 0, "vector_score": 0.68},
+        {"name": "A", "age_days": 3, "clicks": 40, "impressions": 60, "hybrid_score": 0.72},
+        {"name": "B", "age_days": 730, "clicks": 1000, "impressions": 5000, "hybrid_score": 0.80},
+        {"name": "C", "age_days": 1, "clicks": 1, "impressions": 1, "hybrid_score": 0.75},
+        {"name": "D", "age_days": 180, "clicks": 0, "impressions": 0, "hybrid_score": 0.68},
     ]
 
-    # -----------------------------------------------------
-    # STEP 1 — Compute HYBRID SCORE (Part 3)
-    # -----------------------------------------------------
-    scored_results = []
+    scored = []
+
+    print("\nPART 3 VERIFICATION")
+    print("=" * 90)
+    print(f"{'Song':<6}{'Age(days)':<12}{'Clicks':<10}{'Impr':<10}{'Hybrid':<10}{'Final Score':<12}")
+    print("-" * 90)
 
     for s in songs:
-
-        # simulate ingestion of ranking features
         r = {
-            "vector_score": s["vector_score"],
-            "text_score": 0.2 if s["name"] == "A" else 0.05,
+            "vector_score": s["hybrid_score"],
+            "text_score": 0.0,
             "clicks": s["clicks"],
             "impressions": s["impressions"],
-            "created_at": time.time() - s["age_days"] * 86400
+            "created_at": time.time() - s["age_days"] * 86400,
         }
 
-        score = calculate_final_score(r)
-
-        print(s["name"], score)
-
-        scored_results.append({
+        final_score = calculate_final_score(r)
+        scored.append({
+            "name": s["name"],
+            "score": final_score,
             "conversion_group_id": s["name"],
-            "score": score
         })
 
-    # -----------------------------------------------------
-    # STEP 2 — APPLY DIVERSITY LAYER (Part 5)
-    # -----------------------------------------------------
-    print("\nDIVERSIFIED OUTPUT:")
+        print(
+            f"{s['name']:<6}{s['age_days']:<12}{s['clicks']:<10}{s['impressions']:<10}"
+            f"{s['hybrid_score']:<10.2f}{final_score:<12.4f}"
+        )
 
-    print(diversify_results(scored_results))
+    ranked = sorted(scored, key=lambda x: x["score"], reverse=True)
+
+    print("\nRANK ORDER:")
+    for i, row in enumerate(ranked, 1):
+        print(f"{i}. {row['name']} | {row['score']:.4f}")
+
+    print("\nDIVERSIFIED OUTPUT:")
+    print(diversify_results(ranked))
