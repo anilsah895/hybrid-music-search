@@ -10,3 +10,5 @@ python-dotenv
 orjson
 psycopg2-binary  
 httpx>=0.27.0
+pytest
+pytest-asyncio

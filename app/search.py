@@ -1,26 +1,37 @@
+import asyncio
 from sqlalchemy import text
+from app.database import SessionLocal
 
 
-async def hybrid_search(session, query: str, embedding: list[float], limit: int = 20):
+# -----------------------------
+# convert python list → pgvector string
+# -----------------------------
+def format_embedding(embedding: list[float]) -> str:
+    return "[" + ",".join(map(str, embedding)) + "]"
+
+
+# -----------------------------
+# HYBRID SEARCH
+# -----------------------------
+async def hybrid_search(session, query: str, embedding: str, limit: int = 20):
 
     sql = text("""
         WITH q AS (
-            -- safer NLP-friendly parsing (not overly strict)
             SELECT plainto_tsquery('english', :query) AS fts_query
         ),
 
-        -- VECTOR SEARCH (candidate retrieval first)
         vector_candidates AS (
             SELECT
                 id,
-                embedding <=> :embedding AS distance,
-                ROW_NUMBER() OVER (ORDER BY embedding <=> :embedding) AS v_rank
+                embedding <=> CAST(:embedding AS vector) AS distance,
+                ROW_NUMBER() OVER (
+                    ORDER BY embedding <=> CAST(:embedding AS vector)
+                ) AS v_rank
             FROM music_tracks
-            ORDER BY embedding <=> :embedding
+            ORDER BY embedding <=> CAST(:embedding AS vector)
             LIMIT 200
         ),
 
-        -- FTS SEARCH (separate candidate pool)
         fts_candidates AS (
             SELECT
                 id,
@@ -33,22 +44,13 @@ async def hybrid_search(session, query: str, embedding: list[float], limit: int 
             LIMIT 200
         ),
 
-        -- HYBRID FUSION (rank-based, stable)
         fused AS (
             SELECT
                 COALESCE(v.id, f.id) AS id,
-
-                -- normalized reciprocal rank fusion
-                (
-                    1.0 / (60 + COALESCE(v.v_rank, 200))
-                ) +
-                (
-                    1.0 / (60 + COALESCE(f.f_rank, 200))
-                ) AS score
-
+                (1.0 / (60 + COALESCE(v.v_rank, 200))) +
+                (1.0 / (60 + COALESCE(f.f_rank, 200))) AS score
             FROM vector_candidates v
-            FULL OUTER JOIN fts_candidates f
-            ON v.id = f.id
+            FULL OUTER JOIN fts_candidates f ON v.id = f.id
         )
 
         SELECT
@@ -67,3 +69,20 @@ async def hybrid_search(session, query: str, embedding: list[float], limit: int 
     })
 
     return result.mappings().all()
+
+
+# -----------------------------
+# SYNC WRAPPER (SAFE)
+# -----------------------------
+def search(query: str, embedding: list[float] | None = None):
+
+    if embedding is None:
+        embedding = [0.1] * 1536  # placeholder
+
+    embedding_str = format_embedding(embedding)
+
+    async def _run():
+        async with SessionLocal() as session:
+            return await hybrid_search(session, query, embedding_str)
+
+    return asyncio.run(_run())
