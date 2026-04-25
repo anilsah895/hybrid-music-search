@@ -2,24 +2,14 @@ import asyncio
 from sqlalchemy import text
 from app.database import SessionLocal
 
-
-# -----------------------------
-# convert python list → pgvector string
-# -----------------------------
 def format_embedding(embedding: list[float]) -> str:
     return "[" + ",".join(map(str, embedding)) + "]"
 
-
-# -----------------------------
-# HYBRID SEARCH
-# -----------------------------
 async def hybrid_search(session, query: str, embedding: str, limit: int = 20):
-
     sql = text("""
         WITH q AS (
             SELECT plainto_tsquery('english', :query) AS fts_query
         ),
-
         vector_candidates AS (
             SELECT
                 id,
@@ -31,7 +21,6 @@ async def hybrid_search(session, query: str, embedding: str, limit: int = 20):
             ORDER BY embedding <=> CAST(:embedding AS vector)
             LIMIT 200
         ),
-
         fts_candidates AS (
             SELECT
                 id,
@@ -43,7 +32,6 @@ async def hybrid_search(session, query: str, embedding: str, limit: int = 20):
             WHERE search_vector @@ q.fts_query
             LIMIT 200
         ),
-
         fused AS (
             SELECT
                 COALESCE(v.id, f.id) AS id,
@@ -52,7 +40,6 @@ async def hybrid_search(session, query: str, embedding: str, limit: int = 20):
             FROM vector_candidates v
             FULL OUTER JOIN fts_candidates f ON v.id = f.id
         )
-
         SELECT
             m.*,
             fused.score
@@ -67,22 +54,16 @@ async def hybrid_search(session, query: str, embedding: str, limit: int = 20):
         "embedding": embedding,
         "limit": limit
     })
-
     return result.mappings().all()
 
-
-# -----------------------------
-# SYNC WRAPPER (SAFE)
-# -----------------------------
-def search(query: str, embedding: list[float] | None = None):
-
+async def search_async(query: str, embedding: list[float] | None = None):
     if embedding is None:
-        embedding = [0.1] * 1536  # placeholder
+        embedding = [0.1] * 1536
 
     embedding_str = format_embedding(embedding)
 
-    async def _run():
-        async with SessionLocal() as session:
-            return await hybrid_search(session, query, embedding_str)
+    async with SessionLocal() as session:
+        return await hybrid_search(session, query, embedding_str)
 
-    return asyncio.run(_run())
+def search(query: str, embedding: list[float] | None = None):
+    return asyncio.run(search_async(query, embedding))
