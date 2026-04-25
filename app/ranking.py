@@ -151,47 +151,6 @@ def diversify_results(results, k=10):
 
     return out
 
-
-# =========================================================
-# TEST PIPELINE (SIMULATING PRODUCTION FLOW)
-# =========================================================
-# if __name__ == "__main__":
-#     songs = [
-#         {"name": "A", "age_days": 3, "clicks": 40, "impressions": 60, "vector_score": 0.72},
-#         {"name": "B", "age_days": 730, "clicks": 1000, "impressions": 5000, "vector_score": 0.80},
-#         {"name": "C", "age_days": 1, "clicks": 1, "impressions": 1, "vector_score": 0.75},
-#         {"name": "D", "age_days": 180, "clicks": 0, "impressions": 0, "vector_score": 0.68},
-#     ]
-
-#     # -----------------------------------------------------
-#     # STEP 1 — Compute hybrid scores
-#     # -----------------------------------------------------
-#     scored_results = []
-
-#     for s in songs:
-#         # Simulate feature assembly coming from retrieval + feedback layers
-#         r = {
-#             "vector_score": s["vector_score"],
-#             "text_score": 0.2 if s["name"] == "A" else 0.05,
-#             "clicks": s["clicks"],
-#             "impressions": s["impressions"],
-#             "created_at": time.time() - s["age_days"] * 86400,
-#         }
-
-#         score = calculate_final_score(r)
-#         print(s["name"], score)
-
-#         scored_results.append({
-#             "conversion_group_id": s["name"],
-#             "score": score,
-#         })
-
-#     # -----------------------------------------------------
-#     # STEP 2 — Apply diversity re-ranking
-#     # -----------------------------------------------------
-#     print("\nDIVERSIFIED OUTPUT:")
-#     print(diversify_results(scored_results))
-
 if __name__ == "__main__":
     songs = [
         {"name": "A", "age_days": 3, "clicks": 40, "impressions": 60, "hybrid_score": 0.72},
