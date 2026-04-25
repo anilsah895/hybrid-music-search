@@ -157,69 +157,55 @@ We retain `raw_payload` as JSONB to ensure:
 
 ## Problem Summary
 
-The original hybrid search query failed on keyword-heavy queries such as "C major", "128 BPM", and "female vocal", even though these terms existed in the dataset.
-
-At the same time, semantic queries like "sad rainy piano" worked correctly.
-
-This indicated a breakdown in full-text search handling and fusion logic.
+Keyword-heavy queries like **“C major”**, **“128 BPM”**, and **“female vocal”** fail, while semantic queries like **“sad rainy piano”** work correctly.  
+This indicates issues in both full-text search parsing and hybrid fusion logic.
 
 ---
 
 ## Bug 1 — FTS Handling Issue
 
-The system used `to_tsquery`, which is too strict and not suitable for natural or structured queries.
+The system uses `to_tsquery`, which is too strict for natural or structured queries.
 
-### Why this is a problem:
+### Why this is a problem
+- Breaks phrases into boolean tokens (`"C major"` → `c & major`)
+- Loses numeric/unit meaning (`"128 BPM"`)
+- Does not preserve user intent for structured metadata queries
 
-- It enforces rigid boolean parsing of user input
-- Breaks structured phrases like "128 BPM" into meaningless tokens
-- Does not preserve phrase intent or numeric meaning
-
-### User impact:
-
-- Exact keyword queries fail despite valid data existing
-- Users feel the system does not understand precise constraints
-- Search behaves unpredictably for structured music metadata queries
+### User impact
+- Exact keyword matches fail despite existing data
+- Structured music filters (key, BPM, vocals) become unreliable
+- Keyword search feels broken or inconsistent
 
 ---
 
 ## Bug 2 — Fusion Logic Problem
 
-The original fusion relied only on:
+Fusion is based on rank positions from independently truncated top-N results.
 
-- row-number based ranking from vector and FTS results
+### Why this is a problem
+- Rank is not a true relevance signal
+- LIMIT 100 causes early candidate loss
+- Vector and FTS signals are not comparable in scale
 
-### Why this is a problem:
-
-- Rank position is not a true relevance signal
-- Sensitive to LIMIT truncation in subqueries
-- Does not reflect magnitude differences in similarity or text relevance
-
-### User impact:
-
-- Relevant keyword matches are buried
-- Small ranking shifts cause large ordering changes
-- Results feel unstable and inconsistent across similar queries
+### User impact
+- Relevant keyword matches get buried
+- Results become unstable across similar queries
+- Vector search dominates even for exact matches
 
 ---
 
 ## Fix Summary
 
-We corrected the system by:
-
-- Switching to safer `plainto_tsquery` parsing
-- Ensuring correct filtering using `search_vector @@ query`
-- Introducing weighted score fusion:
-  - vector similarity (0.6)
-  - text relevance (0.4)
+- Replaced strict parsing with `plainto_tsquery`
+- Ensured proper filtering using `search_vector @@ query`
+- Used weighted fusion:
+  - 0.6 vector similarity
+  - 0.4 text relevance
 
 ---
 
 ## Resulting Improvement
 
-After the fix:
-
-- Exact keyword queries correctly surface matching songs
-- Semantic queries remain strong via vector search
-- Hybrid queries correctly balance both signals
-- Ranking becomes stable and interpretable
+- Accurate keyword matching restored
+- Semantic search remains strong
+- Hybrid ranking becomes stable and balanced
