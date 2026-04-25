@@ -81,3 +81,8 @@ data/
 # -------------------------
 tmp/
 temp/
+
+tests/__pycache__/
+# Subdirectory __pycache__ (not just root-level)
+**/__pycache__/
+tests/
