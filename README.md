@@ -86,7 +86,15 @@ python -m scripts.verify
 This runs a few representative queries (`"new pop"`, `"C major female vocal"`, `"energetic electronic"`) through the full hybrid pipeline and prints the top results with scores and lineage ids.
 
 ---
+### 5. Run Feedback Buffer Validation (Part 4)
 
+```bash
+python -m scripts.simulate_feedback
+```
+
+This generates high‑QPS feedback events into `FeedbackBuffer`, flushes the aggregated counters to Postgres, and verifies that `clicks` and `impressions` in `music_tracks` match the expected buffered totals.[file:177][file:174]
+
+---
 ## Files of Interest
 
 - `docker-compose.yml` — Postgres + pgvector service
@@ -162,6 +170,9 @@ This demonstrates:
 
 - Embeddings used here are deterministic placeholders to keep the seeding step self‑contained; in a real deployment, both indexed songs and live queries would use the same production embedding model.
 - Diversity is lineage‑based: it prevents multiple variants from the same generation lineage from clustering in the top results, but it does not attempt genre/artist‑level diversification.
-- Feedback buffering is intentionally kept in‑memory for this assessment; a production system would use a durable queue (e.g. Redis/Kafka) to avoid loss on process restart.
+- Feedback buffering uses an in‑memory `FeedbackBuffer` that aggregates `click` and `impression` events and periodically flushes batched counter updates to `music_tracks` to reduce row‑level lock contention.[file:174][file:163]  
+- The maximum staleness of engagement counters feeding the reranker is roughly the flush interval (about 1 second), which is acceptable given the heuristic nature of the reranking logic.[file:163]  
+- Because the buffer is in‑memory, unflushed events can be lost on process restart; a production system would move this path to a durable queue or store (e.g. Redis, Kafka) to avoid data loss.[file:163]  
+
 
 See `DECISIONS.md` for deeper reasoning and trade‑offs for each part.
