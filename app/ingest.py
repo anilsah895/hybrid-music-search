@@ -1,3 +1,5 @@
+import time
+import random
 import asyncio
 import uuid
 from typing import Any, Dict, List
@@ -66,7 +68,7 @@ def transform(record: Dict) -> List[Dict]:
         or record.get("title")
     )
 
-    embedding = fake_embedding(text_for_embedding)
+    embedding = fake_embedding(text_for_embedding or "")
 
     group_id = uuid.uuid4()
 
@@ -86,7 +88,7 @@ def transform(record: Dict) -> List[Dict]:
         "conversion_group_id": group_id,
         "clicks": 0,
         "impressions": 0,
-        "created_at": 0,
+        "created_at": int(time.time()) - random.randint(0, 86400 * 365),
 
         # embedding for vector search
         "embedding": embedding,
