@@ -208,47 +208,31 @@ Interpretation:
 
 ## Part 4 — Concurrency Decision
 
-### Decision
+### Decision made
 
-I chose buffered aggregation instead of direct row updates on every feedback event. The design:
+I use an in-memory `FeedbackBuffer` to aggregate `click` and `impression` events instead of updating `music_tracks` on every `POST /feedback` request.[file:174]  
+The buffer collects increments by `output_id`, and the application periodically calls `flush` to write batched counter updates to Postgres in a single commit.[file:174][file:163]  
+I validated this approach with `scripts.simulate_feedback`, which generated high-QPS feedback, buffered it successfully, flushed it to the database, and verified that the stored counts matched the expected totals.[file:163]
 
-- `POST /feedback` accepts events with `{output_id, type}`.
-- An in‑memory buffer accumulates deltas keyed by `output_id`.
-- A background task flushes aggregated increments to Postgres every N seconds (e.g. 1 second).
-- Flush uses batched `UPDATE` statements to apply increments (`clicks += x`, `impressions += y`).
+### Why
 
-This drastically reduces row‑level lock contention at ~5,000 events/sec by shifting from many small writes to fewer batched writes.
+At roughly 5,000 feedback events per second, naive per-request `UPDATE` statements create row-level lock contention on hot tracks and amplify database writes.[file:163]  
+Buffering in memory and flushing aggregated updates in batches reduces lock churn and keeps the write path simple enough for this assessment.[file:163]
 
-### Considered and Rejected
+### Maximum staleness
 
-- **Naive `UPDATE ... SET clicks = clicks + 1` per request**: rejected because the prompt explicitly states this causes row‑level lock contention.
-- **Immediately introducing Redis/Kafka**: rejected for the assessment to keep the implementation smaller and easier to reason about, while still clearly describing how I’d harden it later.
-- **Pretending there is no event loss risk**: rejected; I explicitly acknowledge potential drop on restart.
+The maximum staleness is approximately the flush interval plus a small processing delay; with a 1-second flush cadence, the reranker may read counts that are about 1 second old.[file:163]  
+That is acceptable here because Part 3’s reranker is heuristic and does not require millisecond-accurate engagement counters.[file:163]
 
-### Maximum Staleness
+### Restart behavior
 
-With a 1‑second flush cadence, counts feeding into the reranker may be ~1 second stale, plus a small processing delay. For search reranking this is acceptable; the ranking function is heuristic and does not require millisecond‑accurate counters. This is a deliberate trade‑off for higher write throughput.
+If the process restarts before a buffered batch is flushed, those in-memory events are lost.[file:163]  
+This is the main failure mode of the chosen design, and I accept it for the assessment in exchange for lower complexity.[file:163]
 
-### Restart Behavior
+### Next bottleneck
 
-If the process restarts mid‑flush, in‑memory buffered events not yet written will be lost. That is the main failure mode of this simplified design. For the assessment, I accept that and document it; in production I’d likely move the buffer to a durable queue (Redis / Kafka) or use idempotent event logs.
-
-### Next Bottleneck After Locks
-
-Once row‑lock contention is reduced, the next likely bottlenecks are:
-
-- Database write throughput during flushes.
-- Application CPU / network overhead.
-- Or the feedback ingestion layer itself if a single process handles all 5,000 rps.
-
-At that point, horizontal scaling or a durable event stream becomes the next design question.
-
-### Known Limitations
-
-- Buffered in‑memory aggregation is not durable.
-- Hot‑key skew can still produce bursty flushes for extremely popular songs.
-- The staleness window is deliberate, not accidental.
-
+After removing row-lock contention, the next likely bottlenecks are database write throughput during flushes, service CPU/network overhead, or the ingestion layer itself if a single process handles all 5,000 rps.[file:163]  
+In a production system, this would likely push the design toward a durable queue or horizontally scaled consumers.[file:163]
 ---
 
 ## Part 5 — Diversity in Results
