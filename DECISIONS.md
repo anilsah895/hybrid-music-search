@@ -67,52 +67,34 @@ I created:
 
 ---
 
-## Part 2 — Broken Search, Find the Bug
+### Part 2 — Broken Search, Find the Bug
 
-### Decision
+**Decision**
 
-I corrected the hybrid retrieval query in two places:
+I identified two distinct bugs in the original hybrid retrieval pipeline.
 
-1. The FTS parsing and query construction
-2. The post-fusion duplicate handling and ranking setup
+**Bug 1 — FTS: `to_tsquery` on raw user text.** The original query used `to_tsquery('english', $2)` directly on unprocessed user input. `to_tsquery` expects tsquery syntax (`&`, `|`, `!` operators), so a natural-language query like "C major female vocal" would be parsed as a literal string requiring those operators, causing near-silent failure for keyword queries. In practice, this causes queries like "C major", "128 BPM", or "female vocal" to underperform or fail to match even when the terms exist in the source text. Vibe queries may appear to work because vector search retrieves semantically similar songs, masking the lexical weakness, but technical intent gets lost.
 
-The broken query used `to_tsquery('english', $2)` directly on raw user text. That is too strict and syntax-sensitive for queries like:
+I switched to `plainto_tsquery('english', $2)` in the corrected implementation. `plainto_tsquery` tokenizes the input and ANDs terms automatically, making it safe for arbitrary user text.
 
-- `"C major"`
-- `"128 BPM"`
-- `"female vocal"`
+**Bug 2 — Fusion: asymmetric COALESCE defaults in RRF.** The original RRF fusion used `COALESCE(v.rank, 100)` and `COALESCE(f.rank, 100)` as fallback ranks. This is not symmetric: a row absent from vector search gets rank 100, but a row absent from FTS also gets rank 100, even though the two candidate sets may return very different numbers of rows. Combined with `ROW_NUMBER()` in each CTE and arbitrary `LIMIT 100` values, this produces unstable fusion scores when one side returns fewer results. The original fusion also did not account for sibling variants or diversity, so multiple rows from the same `conversion_group_id` lineage could dominate top results.
 
-`to_tsquery` expects tsquery syntax, not arbitrary user text. In practice, this causes keyword-style or phrase-like queries to underperform or fail to match even when the terms exist in the source text. Users experience this as, "The exact words are in the data, but search still misses them." Vibe queries may appear to work because vector search retrieves semantically similar songs, masking the lexical weakness, but technical intent gets lost.
+I addressed this by:
+- Increasing both candidate sets to `LIMIT 200` and using a smaller fusion constant (10 instead of 60) to reduce the impact of rank gaps.
+- Adding `DISTINCT ON (conversion_group_id)` in SQL to retain the best candidate per lineage before final ordering.
+- Adding a Python reranker (`calculate_final_score`) for recency, confidence-aware engagement, and a diversity pass to reduce sibling clustering.
 
-I switched to `plainto_tsquery('english', $2)` in the corrected implementation. `plainto_tsquery` is designed for plain input text and normalizes it into a tsquery more safely than `to_tsquery`, which makes it better suited to user-entered searches.[web:7][web:10]
-
-The original fusion strategy used reciprocal rank fusion but did not account for sibling variants or diversity. Multiple rows can represent closely related outputs from the same generation lineage; without explicit lineage-aware handling, the top results get clogged by near-duplicates. Additionally, using a flat RRF constant without downstream reranking can produce a very narrow score range where final ordering feels arbitrary.
-
-I kept hybrid retrieval, but added:
-
-- Lineage-aware deduplication using `conversion_group_id`
-- A Python reranker for recency and engagement
-- A diversity pass to reduce sibling clustering
-
-The corrected retrieval query uses:
-
-- `plainto_tsquery` for FTS
-- Both vector and FTS candidate generation
-- Reciprocal rank fusion
-- `DISTINCT ON (conversion_group_id)` to retain the best candidate per lineage before final ordering
-
-This makes lexical queries work better and removes obvious duplicate sibling clutter before reranking.
-
-### Considered and Rejected
+**Considered and Rejected**
 
 - **Using only vector search**: Rejected because it performs poorly on explicit technical queries such as BPM and key.
 - **Using only FTS**: Rejected because vibe-style natural-language intent is better captured with embeddings.
 - **Relying only on SQL-level hybrid fusion with no reranking**: Rejected because business constraints require freshness, confidence-aware engagement, and diversity.
 
-### Known Limitations
+**Known Limitations**
 
-- Retrieval quality still depends on embedding quality. If query embeddings are placeholder or unavailable, FTS contributes most of the quality.
-- `plainto_tsquery` is safer than `to_tsquery` for user input, but it is not perfect for all music-specific phrases; production could add phrase search, synonyms, or custom dictionaries.
+- Retrieval quality still depends on embedding quality. In a real deployment, both indexed songs and live queries would use the same production embedding model rather than the deterministic placeholders used here.
+- `plainto_tsquery` is safer than `to_tsquery` for user input, but it is not perfect for all music-specific phrases. A production system could add phrase search, synonyms, or a custom dictionary for musical terms like "C major", "128 BPM", or "female vocal".
+- The fusion constant (10) and the candidate set limit (200) were chosen heuristically to reduce rank asymmetry, but were not empirically tuned against a held-out query set.
 
 ---
 
