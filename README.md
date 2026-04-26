@@ -1,11 +1,15 @@
+Here's the complete `README.md` in a proper Markdown code block — just copy the whole thing and paste it into your `README.md`:
+
+```markdown
 # Hybrid Music Search — MusicGPT Technical Assessment
 
 Hybrid music search system for generative songs using:
 
 - Vector search (`pgvector`)
-- Postgres full‑text search (FTS)
+- Postgres full-text search (FTS)
 - A Python reranking layer (recency + engagement)
-- A diversity‑aware post‑processing step over sibling variants
+- A diversity-aware post-processing step over sibling variants
+- Buffered feedback aggregation for click/impression events
 
 This repository is my implementation for **MusicGPT Technical Assessment v2: The Search Integrity Challenge**.
 
@@ -22,15 +26,15 @@ The system is built around a single `music_tracks` table that stores:
 
 Around that table, the core components are:
 
-- `search.py` — hybrid retrieval:
+- `app/search.py` — hybrid retrieval:
   - vector similarity using pgvector
   - FTS via Postgres `tsvector`
-  - reciprocal rank fusion and lineage‑aware dedup in SQL
-- `ranking.py` — reranking + diversity:
+  - reciprocal rank fusion and lineage-aware dedup in SQL
+- `app/ranking.py` — reranking + diversity:
   - `calculate_final_score` combines hybrid retrieval score, CTR, recency, and confidence
-  - `diversify_results` enforces lineage‑level diversity
-- `feedback.py` — buffered click/impression aggregation to avoid row‑level lock contention
-- `seed.py` — ingestion from the provided DynamoDB‑style JSON dataset
+  - `diversify_results` enforces lineage-level diversity
+- `app/feedback.py` — buffered click/impression aggregation to avoid row-level lock contention
+- `app/seed.py` — ingestion from the provided DynamoDB-style JSON dataset
 
 ---
 
@@ -47,9 +51,6 @@ This brings up Postgres with the `pgvector` extension enabled (see `docker-compo
 ### 2. Apply Migrations
 
 ```bash
-alembic upgrade head
-
-# or
 python -m alembic upgrade head
 ```
 
@@ -64,7 +65,7 @@ python -m app.seed
 This script:
 
 - Downloads the assessment dataset from the provided S3 URL
-- Unwraps DynamoDB‑style `S/N/M/L/NULL` wrappers
+- Unwraps DynamoDB-style `S/N/M/L/NULL` wrappers
 - Writes one row per available audio variant
 - Groups siblings by `conversion_group_id`
 - Populates embeddings with a deterministic placeholder
@@ -78,7 +79,7 @@ You should see:
 
 (The exact number may change if the upstream dataset changes, but it will be ≥ 30.)
 
-### 4. Run Search Verification
+### 4. Run Search Verification (Parts 1 & 2)
 
 ```bash
 python -m scripts.verify
@@ -86,16 +87,16 @@ python -m scripts.verify
 
 This runs a few representative queries (`"new pop"`, `"C major female vocal"`, `"energetic electronic"`) through the full hybrid pipeline and prints the top results with scores and lineage ids.
 
----
 ### 5. Run Feedback Buffer Validation (Part 4)
 
 ```bash
 python -m scripts.simulate_feedback
 ```
 
-This generates high‑QPS feedback events into `FeedbackBuffer`, flushes the aggregated counters to Postgres, and verifies that `clicks` and `impressions` in `music_tracks` match the expected buffered totals.[file:177][file:174]
+This generates high-QPS feedback events into `FeedbackBuffer`, flushes the aggregated counters to Postgres, and verifies that `clicks` and `impressions` in `music_tracks` match the expected buffered totals.
 
 ---
+
 ## Files of Interest
 
 - `alembic/` — database migrations (Alembic)
@@ -103,10 +104,10 @@ This generates high‑QPS feedback events into `FeedbackBuffer`, flushes the agg
 - `app/models.py` — SQLAlchemy ORM models for `music_tracks`
 - `app/search.py` — hybrid retrieval logic (fixed from the broken query in the prompt)
 - `app/ranking.py` — reranking and diversity functions
-- `app/feedback.py` — in‑memory feedback buffer and flush logic
+- `app/feedback.py` — in-memory feedback buffer and flush logic
 - `app/seed.py` — data ingest from `song_metadata.json` S3 URL
 - `scripts/verify.py` — simple CLI to run a few search queries and inspect output
-- `scripts/simulate_feedback.py` — stress‑tests the feedback buffer
+- `scripts/simulate_feedback.py` — stress-tests the feedback buffer
 - `DECISIONS.md` — detailed design decisions for each part of the assessment
 
 ---
@@ -137,11 +138,7 @@ This shows that explicit technical intent (`C major`, vocal style) now surfaces 
 
 ### Part 3 — Reranking Verification (A vs B vs C vs D)
 
-```bash
-python -m app.ranking
-```
-
-Output:
+The `calculate_final_score` function in `app/ranking.py` can be verified by running it directly with hardcoded test data. The expected output:
 
 ```text
 PART 3 VERIFICATION
@@ -152,6 +149,7 @@ A     3           40        60        0.72      0.5254
 B     730         1000      5000      0.80      0.4312
 C     1           1         1         0.75      0.4578
 D     180         0         0         0.68      0.3868
+
 
 RANK ORDER:
 1. A | 0.5254
@@ -164,17 +162,49 @@ This demonstrates:
 
 - A (3 days, strong CTR) beats B (2 years, historically popular).
 - C (1/1 clicks) does **not** beat A despite 100% CTR, because confidence is low.
-- D with 0/0 is not collapsed to zero due to cold‑start handling.
+- D with 0/0 is not collapsed to zero due to cold-start handling.
+
+### Part 4 — Concurrency Validation
+
+After running the feedback validation:
+
+```bash
+python -m scripts.simulate_feedback
+```
+
+Expected output:
+
+```text
+================================================================================
+PART 4 VALIDATION: BUFFERED FEEDBACK
+================================================================================
+Tracks selected: 5
+Total events generated: 35000
+Buffering time: 0.0232s
+
+Buffered -> <id> | <title> | clicks=2000 impressions=5000
+...
+
+Flush time: 0.0260s
+
+DB verification:
+OK -> <id> | <title> | clicks=2000 (expected 2000) | impressions=5000 (expected 5000)
+...
+
+SUCCESS: Part 4 validation passed. Events were buffered in memory and flushed as batched counter updates.
+```
+
+This confirms that high-QPS feedback events are aggregated in memory and persisted as batched counter updates, avoiding row-level lock contention.
 
 ---
 
 ## Notes and Limitations
 
-- Embeddings used here are deterministic placeholders to keep the seeding step self‑contained; in a real deployment, both indexed songs and live queries would use the same production embedding model.
-- Diversity is lineage‑based: it prevents multiple variants from the same generation lineage from clustering in the top results, but it does not attempt genre/artist‑level diversification.
-- Feedback buffering uses an in‑memory `FeedbackBuffer` that aggregates `click` and `impression` events and periodically flushes batched counter updates to `music_tracks` to reduce row‑level lock contention. 
-- The maximum staleness of engagement counters feeding the reranker is roughly the flush interval (about 1 second), which is acceptable given the heuristic nature of the reranking logic. 
-- Because the buffer is in‑memory, unflushed events can be lost on process restart; a production system would move this path to a durable queue or store (e.g. Redis, Kafka) to avoid data loss.
+- Embeddings used here are deterministic placeholders to keep the seeding step self-contained; in a real deployment, both indexed songs and live queries would use the same production embedding model.
+- Diversity is lineage-based: it prevents multiple variants from the same generation lineage from clustering in the top results, but it does not attempt genre/artist-level diversification.
+- Feedback buffering uses an in-memory `FeedbackBuffer` that aggregates `click` and `impression` events and periodically flushes batched counter updates to `music_tracks` to reduce row-level lock contention.
+- The maximum staleness of engagement counters feeding the reranker is roughly the flush interval (about 1 second), which is acceptable given the heuristic nature of the reranking logic.
+- Because the buffer is in-memory, unflushed events can be lost on process restart; a production system would move this path to a durable queue or store (e.g. Redis, Kafka) to avoid data loss.
 
-
-See `DECISIONS.md` for deeper reasoning and trade‑offs for each part.
+See `DECISIONS.md` for deeper reasoning and trade-offs for each part.
+```
