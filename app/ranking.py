@@ -115,13 +115,15 @@ def calculate_final_score(r):
 def diversify_results(results, k=10):
     """
     Keep only one top result per conversion_group_id.
-
     This avoids showing multiple sibling variants from the same generation
     near the top of the result page.
-    """
 
+    Enforces: top 5 results must contain at least 4 distinct lineages.
+    If the diverse pool doesn't reach K, fills from the non-diverse pool.
+    """
     seen = set()
-    out = []
+    diverse = []        # first K unique lineages
+    non_diverse = []    # duplicates that can fill gaps if needed
 
     # Diversity is applied after score computation, not before.
     # Highest-scoring items should be considered first.
@@ -133,23 +135,25 @@ def diversify_results(results, k=10):
     for r in sorted_results:
         # conversion_group_id acts as the lineage identifier
         gid = r.get("conversion_group_id")
-
         # If the lineage is missing, fall back to title so we still reduce duplicates
         if gid is None:
             gid = r.get("title", "").strip().lower()
 
-        # Skip duplicate siblings from the same generation lineage
         if gid in seen:
-            continue
+            # This is a duplicate lineage — keep it for potential fill
+            non_diverse.append(r)
+        else:
+            # First occurrence of this lineage
+            seen.add(gid)
+            diverse.append(r)
 
-        seen.add(gid)
-        out.append(r)
+    # Enforce: if we have fewer than k diverse results, fill from non-diverse
+    if len(diverse) < k:
+        remaining = k - len(diverse)
+        diverse.extend(non_diverse[:remaining])
 
-        # Stop once we have k diversified results
-        if len(out) >= k:
-            break
+    return diverse[:k]
 
-    return out
 
 if __name__ == "__main__":
     songs = [
