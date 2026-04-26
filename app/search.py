@@ -9,28 +9,6 @@ def format_embedding(embedding: list[float]) -> str:
     return "[" + ",".join(map(str, embedding)) + "]"
 
 
-def dedupe_results(results, limit=5):
-    # We only want one representative result per generation lineage.
-    # If conversion_group_id is missing, we fall back to normalized title text.
-    seen = set()
-    final = []
-
-    # Stable ordering: highest score first, then ID as deterministic tie-break
-    for r in sorted(results, key=lambda x: (-x["score"], str(x.get("id")))):
-        key = r.get("conversion_group_id") or r.get("title", "").strip().lower()
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-        final.append(r)
-
-        if len(final) >= limit:
-            break
-
-    return final
-
-
 async def hybrid_search(session, query: str, embedding: str, limit: int = 20):
     # Hybrid retrieval strategy:
     # 1. pull semantic candidates using vector similarity
@@ -117,10 +95,7 @@ async def hybrid_search(session, query: str, embedding: str, limit: int = 20):
     })
 
     rows = result.mappings().all()
-
-    # Extra safety: dedupe again in Python in case future SQL changes
-    # or null conversion_group_id values slip through.
-    return dedupe_results(rows, limit=limit)
+    return rows
 
 
 async def search_async(query: str, embedding: list[float] | None = None):
