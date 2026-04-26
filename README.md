@@ -47,7 +47,8 @@ This brings up Postgres with the `pgvector` extension enabled (see `docker-compo
 ### 2. Apply Migrations
 
 ```bash
-poetry run alembic upgrade head
+alembic upgrade head
+
 # or
 python -m alembic upgrade head
 ```
@@ -97,8 +98,9 @@ This generates high‑QPS feedback events into `FeedbackBuffer`, flushes the agg
 ---
 ## Files of Interest
 
-- `docker-compose.yml` — Postgres + pgvector service
-- `app/models.py` — SQLAlchemy async models for `music_tracks`
+- `alembic/` — database migrations (Alembic)
+- `docker-compose.yml` — Postgres + pgvector Docker setup
+- `app/models.py` — SQLAlchemy ORM models for `music_tracks`
 - `app/search.py` — hybrid retrieval logic (fixed from the broken query in the prompt)
 - `app/ranking.py` — reranking and diversity functions
 - `app/feedback.py` — in‑memory feedback buffer and flush logic
@@ -170,9 +172,9 @@ This demonstrates:
 
 - Embeddings used here are deterministic placeholders to keep the seeding step self‑contained; in a real deployment, both indexed songs and live queries would use the same production embedding model.
 - Diversity is lineage‑based: it prevents multiple variants from the same generation lineage from clustering in the top results, but it does not attempt genre/artist‑level diversification.
-- Feedback buffering uses an in‑memory `FeedbackBuffer` that aggregates `click` and `impression` events and periodically flushes batched counter updates to `music_tracks` to reduce row‑level lock contention.[file:174][file:163]  
-- The maximum staleness of engagement counters feeding the reranker is roughly the flush interval (about 1 second), which is acceptable given the heuristic nature of the reranking logic.[file:163]  
-- Because the buffer is in‑memory, unflushed events can be lost on process restart; a production system would move this path to a durable queue or store (e.g. Redis, Kafka) to avoid data loss.[file:163]  
+- Feedback buffering uses an in‑memory `FeedbackBuffer` that aggregates `click` and `impression` events and periodically flushes batched counter updates to `music_tracks` to reduce row‑level lock contention. 
+- The maximum staleness of engagement counters feeding the reranker is roughly the flush interval (about 1 second), which is acceptable given the heuristic nature of the reranking logic. 
+- Because the buffer is in‑memory, unflushed events can be lost on process restart; a production system would move this path to a durable queue or store (e.g. Redis, Kafka) to avoid data loss.
 
 
 See `DECISIONS.md` for deeper reasoning and trade‑offs for each part.
