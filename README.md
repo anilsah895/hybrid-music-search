@@ -1,6 +1,3 @@
-Here's the complete `README.md` in a proper Markdown code block — just copy the whole thing and paste it into your `README.md`:
-
-```markdown
 # Hybrid Music Search — MusicGPT Technical Assessment
 
 Hybrid music search system for generative songs using:
@@ -207,4 +204,3 @@ This confirms that high-QPS feedback events are aggregated in memory and persist
 - Because the buffer is in-memory, unflushed events can be lost on process restart; a production system would move this path to a durable queue or store (e.g. Redis, Kafka) to avoid data loss.
 
 See `DECISIONS.md` for deeper reasoning and trade-offs for each part.
-```
