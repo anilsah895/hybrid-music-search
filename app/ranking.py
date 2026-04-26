@@ -140,7 +140,10 @@ def diversify_results(results, k=10):
             gid = r.get("title", "").strip().lower()
 
         if gid in seen:
-            # This is a duplicate lineage — keep it for potential fill
+            # Penalize repeated lineage variants instead of dropping them entirely,
+            # so sibling results can still appear lower when distinct lineages are limited.
+            r = dict(r)
+            r["score"] *= 0.5
             non_diverse.append(r)
         else:
             # First occurrence of this lineage
@@ -150,9 +153,14 @@ def diversify_results(results, k=10):
     # Enforce: if we have fewer than k diverse results, fill from non-diverse
     if len(diverse) < k:
         remaining = k - len(diverse)
-        diverse.extend(non_diverse[:remaining])
+        final_results = diverse + non_diverse[:remaining]
+    else:
+        final_results = diverse
 
-    return diverse[:k]
+    # Re-rank after adding duplicate lineages so penalized siblings fall below stronger unique results.
+    final_results.sort(key=lambda x: (-x["score"], str(x.get("id"))))
+
+    return final_results[:k]
 
 
 if __name__ == "__main__":
