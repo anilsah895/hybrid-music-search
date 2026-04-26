@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import httpx
 
@@ -183,9 +183,14 @@ async def seed():
             clicks = 0
             impressions = 0
 
-            # Derive a stable created_at instead of using random recency.
-            # If the dataset has no timestamp, use a neutral fixed timestamp.
-            created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+            # Spread tracks across a 3-year window so Part 3 scenarios are realistic.
+            # Stagger created_at so recency logic is verifiable against seeded data.
+            # Use a deterministic spread based on the source_id hash.
+            import hashlib
+            seed_bytes = hashlib.sha256(source_id.encode()).digest()
+            days_offset = int.from_bytes(seed_bytes[:4], "big") % 1095  # spread across ~3 years
+            created_at = datetime(2023, 1, 1, tzinfo=timezone.utc) + timedelta(days=days_offset)
+
 
             # Create one row per sibling audio output, because your current schema
             # stores variants in one table and links them via conversion_group_id.
