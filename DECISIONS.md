@@ -64,6 +64,7 @@ I created:
 
 - The current schema uses `conversion_group_id` as the lineage key; earlier drafts mentioned `generation_id`, but I aligned the implementation to the actual schema names.
 - Some useful technical metadata, such as BPM and key, remains nested unless explicitly extracted. That is acceptable for the assessment, but it could be expanded in a production system.
+- In addition, if the upstream DynamoDB export adds new nested fields, they are automatically preserved in `raw_payload` and `extra_metadata`, but they will not affect search or ranking until I explicitly promote them into first-class columns or indexed JSON paths. Records that lack both `conversion_path_1` and `conversion_path_2` do not produce any stored rows, which is a deliberate choice to skip unusable or malformed generations without breaking the ingest pipeline.
 
 ---
 
@@ -95,6 +96,8 @@ I addressed this by:
 - Retrieval quality still depends on embedding quality. In a real deployment, both indexed songs and live queries would use the same production embedding model rather than the deterministic placeholders used here.
 - `plainto_tsquery` is safer than `to_tsquery` for user input, but it is not perfect for all music-specific phrases. A production system could add phrase search, synonyms, or a custom dictionary for musical terms like "C major", "128 BPM", or "female vocal".
 - The fusion constant (10) and the candidate set limit (200) were chosen heuristically to reduce rank asymmetry, but were not empirically tuned against a held-out query set.
+- Embedding-based retrieval cannot reliably enforce hard constraints such as BPM or key, so lexical filtering/FTS must dominate structured queries like `128 BPM` or `C major` if we want to preserve search integrity for those cases.
+- Given more time, I would add a lightweight query-intent layer that detects explicit technical constraints (BPM numbers, musical keys, vocal descriptors) and routes those queries to be lexical-first, while vibe-only queries lean more on the vector score. This ensures structured intent is not overwhelmed by vague semantic similarity.
 
 ---
 
@@ -130,7 +133,7 @@ final = (
     0.10 * recency_score
 )
 ```
-
+I chose exponential recency decay because user interest in music typically drops off quickly soon after release and then flattens, which is better modeled by an exponential curve than by a linear function. The Beta prior constants (for example, adding 5 pseudo-clicks and 20 pseudo-non-clicks) treat early CTR as a hint rather than a truth, so a 1/1 sample does not overpower a stable 40/60 sample with many impressions. The weights (0.45 vector, 0.25 text, 0.20 CTR, 0.10 recency) keep retrieval relevance as the dominant signal while allowing engagement quality and freshness to adjust rankings instead of completely overriding them.
 with:
 
 - `ctr = (clicks + 5) / (impressions + 5 + 20)`
