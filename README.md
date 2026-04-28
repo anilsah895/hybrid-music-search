@@ -37,7 +37,36 @@ Around that table, the core components are:
 
 ## How to Run
 
-### 1. Start Postgres with pgvector
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/anilsah895/hybrid-music-search.git
+cd hybrid-music-search
+```
+
+### 2. Create and activate a virtual environment
+
+#### Windows PowerShell
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+#### Linux / macOS
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 3. Start Docker Desktop
+
+Make sure Docker Desktop is running before starting the database container (required for `docker compose up -d` to work).
+
+### 4. Start Postgres with pgvector
 
 ```bash
 docker compose up -d
@@ -45,7 +74,7 @@ docker compose up -d
 
 This brings up Postgres with the `pgvector` extension enabled (see `docker-compose.yml`).
 
-### 2. Apply Migrations
+### 5. Apply Migrations
 
 ```bash
 python -m alembic upgrade head
@@ -53,7 +82,7 @@ python -m alembic upgrade head
 
 This creates the `music_tracks` table and associated indexes (GIN for FTS, IVFFLAT for vectors).
 
-### 3. Seed the Database
+### 6. Seed the Database
 
 ```bash
 python -m app.seed
@@ -76,7 +105,7 @@ You should see:
 
 (The exact number may change if the upstream dataset changes, but it will be ≥ 30.)
 
-### 4. Run Search Verification (Parts 1 & 2)
+### 7. Run Search Verification (Parts 1 & 2)
 
 ```bash
 python -m scripts.verify
@@ -84,13 +113,32 @@ python -m scripts.verify
 
 This runs a few representative queries (`"new pop"`, `"C major female vocal"`, `"energetic electronic"`) through the full hybrid pipeline and prints the top results with scores and lineage ids.
 
-### 5. Run Feedback Buffer Validation (Part 4)
+### 8. Run Feedback Buffer Validation (Part 4)
 
 ```bash
 python -m scripts.simulate_feedback
 ```
 
 This generates high-QPS feedback events into `FeedbackBuffer`, flushes the aggregated counters to Postgres, and verifies that `clicks` and `impressions` in `music_tracks` match the expected buffered totals.
+
+## Clean Re-run
+
+If you want to simulate a completely fresh environment, wipe the existing database volume before starting again:
+
+```bash
+docker compose down -v
+docker compose up -d
+python -m alembic upgrade head
+python -m app.seed
+```
+
+This is the recommended path when verifying the repository from scratch because Docker may otherwise reuse an existing Postgres volume that already contains seeded rows.
+
+## Notes on Seeding
+
+- `app.seed` is intended for a fresh database run.
+- If you run `python -m app.seed` again against an already-seeded database, you may see a unique-key error on `external_id`; this is expected because each track variant is inserted with a unique external identifier and duplicate inserts are blocked by design.
+- If the dataset download is interrupted, simply rerun `python -m app.seed`, or use the clean re-run flow above if the database was partially seeded.
 
 ---
 
