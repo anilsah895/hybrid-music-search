@@ -50,6 +50,7 @@ async def hybrid_search(session, query: str, embedding: str, limit: int = 20):
             ) AS f_rank
         FROM music_tracks, q
         WHERE search_vector @@ q.fts_query
+        ORDER BY text_score DESC, id  
         LIMIT 200
     ),
 
