@@ -62,8 +62,8 @@ I created:
 
 ### Known Limitations
 
-- The current schema uses `conversion_group_id` as the lineage key; earlier drafts mentioned `generation_id`, but I aligned the implementation to the actual schema names.
-- Some useful technical metadata, such as BPM and key, remains nested unless explicitly extracted. That is acceptable for the assessment, but it could be expanded in a production system.
+- The current schema uses `conversion_group_id` as the lineage key; matching the field names in the source export.
+- Some useful technical metadata, such as BPM and key, remains nested unless explicitly extracted; this is sufficient for the assessment but would likely be expanded in a production system.
 - In addition, if the upstream DynamoDB export adds new nested fields, they are automatically preserved in `raw_payload` and `extra_metadata`, but they will not affect search or ranking until I explicitly promote them into first-class columns or indexed JSON paths. Records that lack both `conversion_path_1` and `conversion_path_2` do not produce any stored rows, which is a deliberate choice to skip unusable or malformed generations without breaking the ingest pipeline.
 
 ---
@@ -208,7 +208,7 @@ I validated this approach with `scripts.simulate_feedback`, which generated high
 
 At roughly 5,000 feedback events per second, naive per-request `UPDATE` statements create row-level lock contention on hot tracks and amplify database writes.
 
-Buffering in memory and flushing aggregated updates in batches reduces lock churn and keeps the write path simple enough for this assessment.
+Buffering in memory and flushing aggregated updates in batches reduces lock churn and keeps the write path simple enough.
 
 ### Maximum Staleness
 
